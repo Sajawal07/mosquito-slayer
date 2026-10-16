@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Mosquito Slayer</string>
+    <string name="title_activity_main">Mosquito Slayer</string>
+    <string name="package_name">com.mosquitoslayer.game</string>
+    <string name="custom_url_scheme">com.mosquitoslayer.game</string>
+</resources>

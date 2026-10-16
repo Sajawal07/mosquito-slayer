@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build Outputs
+dist/
+build/
+android/app/build/
+android/.gradle/
+android/capacitor-cordova-android-plugins/build/
+.gradle/
+
+# Android Local Configuration
+android/local.properties
+.idea/
+*.iml
+
+# CRITICAL SECURITY - NEVER COMMIT KEYSTORES OR PASSWORDS
+*.jks
+*.keystore
+*.p12
+*.key
+KEYSTORE_DETAILS.txt
+RELEASE_PLAYSTORE_BUILD/*.jks
+RELEASE_PLAYSTORE_BUILD/*.keystore
+RELEASE_PLAYSTORE_BUILD/KEYSTORE_DETAILS.txt
+
+# Binary App Builds (Keep repo clean and lightweight)
+RELEASE_PLAYSTORE_BUILD/*.apk
+RELEASE_PLAYSTORE_BUILD/*.aab
+*.apk
+*.aab
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.log

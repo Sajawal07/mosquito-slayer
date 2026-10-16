@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Mosquito Slayer</title>
+    <script src="./phaser.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background-color: #000000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            touch-action: none;
+        }
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            background-color: #000;
+        }
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+    <script>
+        // --- GLOBAL DATA ---
+        const GameData = {
+            coins: parseInt(localStorage.getItem('ms_coins')) || 0,
+            highScore: parseInt(localStorage.getItem('ms_highscore')) || 0,
+            maxLevel: parseInt(localStorage.getItem('ms_maxlevel')) || 1,
+            startLevel: 1,
+            currentWeapon: localStorage.getItem('ms_weapon') || 'hand',
+            vibration: localStorage.getItem('ms_vibration') !== 'false',
+            weapons: {
+                hand: { name: 'HAND', radius: 75, price: 0 },
+                slipper: { name: 'SLIPPER', radius: 110, price: 500 },
+                racket: { name: 'RACKET', radius: 150, price: 1500 }
+            },
+            save: function() {
+                localStorage.setItem('ms_coins', this.coins);
+                localStorage.setItem('ms_highscore', this.highScore);
+                localStorage.setItem('ms_maxlevel', this.maxLevel);
+                localStorage.setItem('ms_weapon', this.currentWeapon);
+                localStorage.setItem('ms_vibration', this.vibration);
+            },
+            resetData: function() {
+                this.coins = 0;
+                this.highScore = 0;
+                this.maxLevel = 1;
+                this.startLevel = 1;
+                this.currentWeapon = 'hand';
+                this.save();
+                for (let key in this.weapons) {
+                    if (key !== 'hand') {
+                        localStorage.removeItem(`ms_own_${key}`);
+                    }
+                }
+            }
+        };
+
+        // --- AUDIO ENGINE ---
+        class SoundSynth {
+            constructor() {
+                this.ctx = null;
+                this.buzzing = false;
+                this.isMuted = localStorage.getItem('ms_muted') === 'true';
+                this.ensureContext();
+            }
+            ensureContext() {
+                try {
+                    if (!this.ctx) {
+                        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                        if (AudioCtx) this.ctx = new AudioCtx();
+                    }
+                    if (this.ctx && this.ctx.state === 'suspended') {
+                        this.ctx.resume();
+                    }
+                } catch(e) {}
+            }
+            initBuzz() {
+                this.ensureContext();
+                if (!this.ctx || this.buzzing) return;
+                try {
+                    this.buzzing = true;
+                    this.buzzOsc = this.ctx.createOscillator();
+                    this.buzzGain = this.ctx.createGain();
+                    this.buzzOsc.type = 'sawtooth';
+                    this.buzzOsc.frequency.setValueAtTime(150, this.ctx.currentTime);
+                    this.buzzGain.gain.setValueAtTime(0, this.ctx.currentTime);
+                    this.buzzOsc.connect(this.buzzGain);
+                    this.buzzGain.connect(this.ctx.destination);
+                    this.buzzOsc.start();
+                } catch(e) {}
+            }
+            updateBuzz(count, bonus = 0) {
+                if (!this.ctx || !this.buzzing) return;
+                try {
+                    const volume = this.isMuted ? 0 : Math.min(count * 0.02 + bonus, 0.35);
+                    this.buzzGain.gain.setTargetAtTime(volume, this.ctx.currentTime, 0.1);
+                    this.buzzOsc.frequency.setTargetAtTime(150 + (count * 5) + (bonus * 400), this.ctx.currentTime, 0.1);
+                } catch(e) {}
+            }
+            stopBuzz() { 
+                if (this.ctx && this.buzzing) {
+                    try {
+                        this.buzzGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+                    } catch(e) {}
+                }
+            }
+            playEffect(type) {
+                this.ensureContext();
+                if (!this.ctx || this.isMuted) return;
+                try {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    if (type === 'slap') {
+                        osc.type = 'square'; osc.frequency.setValueAtTime(170, this.ctx.currentTime);
+                        osc.frequency.exponentialRampToValueAtTime(35, this.ctx.currentTime + 0.12);
+                        gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+                    } else if (type === 'laugh') {
+                        osc.type = 'sawtooth';
+                        for(let i=0; i<3; i++) {
+                            osc.frequency.setValueAtTime(500, this.ctx.currentTime + i*0.1);
+                            osc.frequency.linearRampToValueAtTime(850, this.ctx.currentTime + i*0.1 + 0.06);
+                        }
+                        gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+                    } else if (type === 'zap') {
+                        osc.type = 'sawtooth';
+                        osc.frequency.setValueAtTime(900, this.ctx.currentTime);
+                        osc.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.2);
+                        gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+                    }
+                    osc.connect(gain); gain.connect(this.ctx.destination);
+                    osc.start(); osc.stop(this.ctx.currentTime + 0.35);
+                } catch(e) {}
+            }
+            toggleMute() { 
+                this.isMuted = !this.isMuted; 
+                localStorage.setItem('ms_muted', this.isMuted);
+                return this.isMuted; 
+            }
+        }
+        const Audio = new SoundSynth();
+        window.addEventListener('pointerdown', () => Audio.ensureContext(), { passive: true });
+        window.addEventListener('touchstart', () => Audio.ensureContext(), { passive: true });
+
+        // --- SCENES ---
+
+        // 1. BOOT SCENE
+        class BootScene extends Phaser.Scene {
+            constructor() { super('BootScene'); }
+            preload() {
+                // Preload all game assets
+                this.load.image('splash', 'assets/images/splash.png');
+                this.load.image('background', 'assets/images/background.png');
+                this.load.image('hand', 'assets/images/hand.png');
+                this.load.image('mosquito_1', 'assets/images/mosquito_1.png');
+                this.load.image('mosquito_2', 'assets/images/mosquito_2.png');
+                this.load.image('slipper', 'assets/images/slipper.png');
+                this.load.image('racket', 'assets/images/racket.png');
+            }
+            create() {
+                this.anims.create({ key: 'fly', frames: [{ key: 'mosquito_1' }, { key: 'mosquito_2' }], frameRate: 15, repeat: -1 });
+                // Transition to animated SplashScene
+                this.scene.start('SplashScene');
+            }
+        }
+
+        // 2. SPLASH SCENE WITH GAMING LOADER BAR
+        class SplashScene extends Phaser.Scene {
+            constructor() { super('SplashScene'); }
+            create() {
+                // Fit splash image to portrait screen
+                const splash = this.add.image(270, 480, 'splash');
+                splash.setDisplaySize(540, 960);
+
+                // Dark gradient overlay at bottom for high-contrast gaming bar visibility
+                const bottomShade = this.add.graphics();
+                bottomShade.fillGradientStyle(0x000000, 0x000000, 0x000000, 0x000000, 0, 0, 0.92, 0.92);
+                bottomShade.fillRect(0, 760, 540, 200);
+
+                // Gaming Loader UI Coordinates
+                const barX = 60;
+                const barY = 880;
+                const barW = 420;
+                const barH = 22;
+
+                // Loader Subtitle Message
+                const tips = [
+                    "CHARGING ELECTRIC RACKET...",
+                    "CALIBRATING SLAP SENSORS...",
+                    "DETECTING MOSQUITO SWARM...",
+                    "PREPARING SLAYER WEAPONS...",
+                    "READY TO SLAY! 🔥"
+                ];
+
+                const statusTxt = this.add.text(270, 830, tips[0], {
+                    fontSize: '15px',
+                    fontFamily: "'Segoe UI', Roboto, sans-serif",
+                    fill: '#00e5ff',
+                    fontStyle: 'bold',
+                    stroke: '#000',
+                    strokeThickness: 3
+                }).setOrigin(0.5);
+
+                // Percentage Text
+                const pctTxt = this.add.text(270, 858, '0%', {
+                    fontSize: '18px',
+                    fontFamily: "'Segoe UI', Roboto, sans-serif",
+                    fill: '#ffd700',
+                    fontStyle: 'bold',
+                    stroke: '#000',
+                    strokeThickness: 4
+                }).setOrigin(0.5);
+
+                // Gaming Bar Outline & Background
+                const bgGraphics = this.add.graphics();
+                // Outer glow border
+                bgGraphics.lineStyle(3, 0x00e5ff, 0.85);
+                bgGraphics.strokeRoundedRect(barX, barY, barW, barH, 11);
+                // Inner dark cyber background
+                bgGraphics.fillStyle(0x091122, 0.95);
+                bgGraphics.fillRoundedRect(barX + 2, barY + 2, barW - 4, barH - 4, 9);
+
+                // Progress Bar Fill Graphics
+                const progressGraphics = this.add.graphics();
+
+                // Spark / Energy particle emitter placeholder or tween
+                let progressObj = { value: 0 };
+
+                this.tweens.add({
+                    targets: progressObj,
+                    value: 100,
+                    duration: 2500,
+                    ease: 'Power2',
+                    onUpdate: () => {
+                        const val = Math.floor(progressObj.value);
+                        pctTxt.setText(`${val}%`);
+
+                        // Dynamic status subtitle
+                        if (val < 25) statusTxt.setText(tips[0]);
+                        else if (val < 50) statusTxt.setText(tips[1]);
+                        else if (val < 75) statusTxt.setText(tips[2]);
+                        else if (val < 98) statusTxt.setText(tips[3]);
+                        else statusTxt.setText(tips[4]);
+
+                        // Redraw gaming fill
+                        progressGraphics.clear();
+                        const fillWidth = Math.max(0, (barW - 6) * (val / 100));
+
+                        if (fillWidth > 0) {
+                            // Electric Gradient: Cyan to Bright Yellow
+                            progressGraphics.fillStyle(val > 80 ? 0xffcc00 : 0x00e5ff, 1);
+                            progressGraphics.fillRoundedRect(barX + 3, barY + 3, fillWidth, barH - 6, 8);
+
+                            // Inner bright neon streak
+                            progressGraphics.fillStyle(0xffffff, 0.65);
+                            progressGraphics.fillRect(barX + 5, barY + 5, fillWidth - 4, (barH - 6) / 3);
+                        }
+                    },
+                    onComplete: () => {
+                        Audio.playEffect('zap');
+                        this.cameras.main.flash(300, 0, 229, 255);
+                        this.time.delayedCall(400, () => {
+                            this.scene.start('MainMenuScene');
+                        });
+                    }
+                });
+            }
+        }
+
+        // 3. MAIN MENU SCENE
+        class MainMenuScene extends Phaser.Scene {
+            constructor() { super('MainMenuScene'); }
+            create() {
+                Audio.stopBuzz();
+                GameData.startLevel = GameData.maxLevel;
+
+                // Background
+                this.add.image(270, 480, 'background').setDisplaySize(540, 960).setAlpha(0.35);
+
+                // Title
+                this.add.text(270, 105, 'MOSQUITO\nSLAYER', {
+                    fontSize: '44px',
+                    fill: '#ff1111',
+                    fontStyle: 'bold',
+                    align: 'center',
+                    stroke: '#ffffff',
+                    strokeThickness: 8
+                }).setOrigin(0.5);
+
+                // Stats Dashboard
+                this.add.rectangle(270, 215, 480, 75, 0x000000, 0.7).setStrokeStyle(2, 0xffd700);
+                this.add.text(110, 215, `🏆 BEST\n${GameData.highScore}`, { fontSize: '15px', fill: '#fff', align: 'center', fontStyle: 'bold' }).setOrigin(0.5);
+                this.add.text(270, 215, `💰 COINS\n${GameData.coins}`, { fontSize: '15px', fill: '#ffd700', align: 'center', fontStyle: 'bold' }).setOrigin(0.5);
+                this.add.text(430, 215, `🔥 MAX LVL\n${GameData.maxLevel}`, { fontSize: '15px', fill: '#00ff88', align: 'center', fontStyle: 'bold' }).setOrigin(0.5);
+
+                // Level Selector
+                this.add.text(270, 295, 'SELECT START LEVEL', { fontSize: '15px', fill: '#00ff00', fontStyle: 'bold' }).setOrigin(0.5);
+                const lvlTxt = this.add.text(270, 345, `<  LEVEL ${GameData.startLevel}  >`, {
+                    fontSize: '30px',
+                    fill: '#ffffff',
+                    fontStyle: 'bold',
+                    backgroundColor: '#111827',
+                    padding: { x: 22, y: 10 }
+                }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+                lvlTxt.on('pointerdown', (p) => {
+                    if (p.x < 270) GameData.startLevel = Math.max(1, GameData.startLevel - 1);
+                    else GameData.startLevel = Math.min(GameData.maxLevel, GameData.startLevel + 1);
+                    lvlTxt.setText(`<  LEVEL ${GameData.startLevel}  >`);
+                });
+
+                // Menu Buttons
+                const btns = [
+                    { t: 'START HUNT 🦟', s: 'GameScene', c: 0xb30000 },
+                    { t: 'WEAPON SHOP 🛒', s: 'ShopScene', c: 0xcc7700 },
+                    { t: 'SETTINGS ⚙️', s: 'SettingsScene', c: 0x223344 }
+                ];
+                btns.forEach((b, i) => {
+                    const y = 460 + (i * 85);
+                    const rect = this.add.rectangle(270, y, 360, 60, b.c).setInteractive({ useHandCursor: true }).setStrokeStyle(2, 0xffffff);
+                    this.add.text(270, y, b.t, { fontSize: '24px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                    rect.on('pointerdown', () => this.scene.start(b.s));
+                });
+            }
+        }
+
+        // 4. GAME SCENE
+        class GameScene extends Phaser.Scene {
+            constructor() { super('GameScene'); }
+
+            init() {
+                this.isSlapping = false;
+                this.lastSlapTime = 0;
+            }
+
+            create() {
+                this.isSlapping = false;
+                this.lastSlapTime = 0;
+                if (this.physics && this.physics.world) {
+                    this.physics.resume();
+                }
+
+                this.level = GameData.startLevel;
+                this.score = (this.level - 1) * 250;
+                this.rage = 0;
+                this.combo = 0;
+                this.levelBonus = 0;
+
+                // Background
+                this.add.image(270, 480, 'background').setDisplaySize(540, 960);
+
+                // Mosquito group
+                this.mosquitoes = this.physics.add.group();
+
+                // UI setup
+                this.createUI();
+                Audio.initBuzz();
+
+                // Weapon asset
+                this.weapon = GameData.weapons[GameData.currentWeapon] || GameData.weapons.hand;
+                const hasAsset = this.textures.exists(GameData.currentWeapon);
+                this.hand = this.add.image(0, 0, hasAsset ? GameData.currentWeapon : 'hand')
+                    .setScale(0.5)
+                    .setVisible(false)
+                    .setDepth(2000);
+
+                this.updateSpawner();
+
+                // Tapping works immediately anywhere on screen
+                this.input.removeAllListeners();
+                this.input.on('pointerdown', (p) => {
+                    if (p.y < 90 && p.x > 380) return; // Top controls area
+                    this.handleSlap(p.x, p.y);
+                });
+            }
+
+            createUI() {
+                this.scoreText = this.add.text(20, 18, `SCORE: ${this.score}`, { fontSize: '24px', fill: '#fff', fontStyle: 'bold' });
+                this.levelText = this.add.text(20, 50, `LEVEL: ${this.level}`, { fontSize: '18px', fill: '#00ff00', fontStyle: 'bold' });
+
+                this.barBG = this.add.rectangle(20, 78, 140, 7, 0x333333).setOrigin(0);
+                this.bar = this.add.rectangle(20, 78, 0, 7, 0x00ff00).setOrigin(0);
+
+                // Rage Meter
+                this.add.text(280, 22, 'RAGE:', { fontSize: '14px', fill: '#ff8888', fontStyle: 'bold' });
+                this.rageBar = this.add.graphics();
+                this.updateRage(0);
+
+                // Top Right Controls
+                const p = this.add.text(500, 20, '⏸', { fontSize: '32px' }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+                p.on('pointerdown', () => { this.scene.pause(); this.scene.launch('PauseScene'); });
+
+                const home = this.add.text(450, 20, '🏠', { fontSize: '32px' }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+                home.on('pointerdown', () => { 
+                    Audio.stopBuzz();
+                    this.scene.stop('GameScene'); 
+                    this.scene.start('MainMenuScene'); 
+                });
+            }
+
+            update() {
+                Audio.updateBuzz(this.mosquitoes.getLength(), this.levelBonus);
+                this.bar.width = 140 * ((this.score % 250) / 250);
+                const next = Math.floor(this.score / 250) + 1;
+                if(next > this.level) { this.level = next; this.levelUp(); }
+            }
+
+            levelUp() {
+                this.levelText.setText('LEVEL: ' + this.level);
+                if (this.level > GameData.maxLevel) { GameData.maxLevel = this.level; GameData.save(); }
+
+                this.effectiveRadius = this.weapon.radius * Math.max(0.65, 1 - (this.level * 0.02));
+                this.levelBonus = 0.3; 
+                this.time.delayedCall(2000, () => this.levelBonus = 0);
+                this.showText(270, 480, `LEVEL ${this.level} UP!`, '#00ff00', 52);
+                this.updateSpawner();
+                this.cameras.main.flash(400, 0, 255, 0);
+            }
+
+            updateSpawner() {
+                if(this.spawnEvent) this.spawnEvent.destroy();
+                this.spawnEvent = this.time.addEvent({ 
+                    delay: Math.max(350, 1400 - (this.level * 160)), 
+                    callback: () => this.spawnMosquito(), 
+                    loop: true 
+                });
+            }
+
+            spawnMosquito() {
+                if(this.mosquitoes.getLength() < 7 + (this.level * 2)) {
+                    const baseScale = 0.065;
+                    const levelScale = Math.max(0.025, baseScale - (Math.max(0, this.level - 5) * 0.005));
+
+                    const m = this.physics.add.sprite(
+                        Phaser.Math.Between(50, 490), 
+                        Phaser.Math.Between(130, 850), 
+                        'mosquito_1'
+                    ).setScale(levelScale);
+
+                    let isSpeedy = this.level >= 3 && Phaser.Math.Between(1, 10) <= (this.level - 1);
+                    if (isSpeedy) {
+                        m.setTint(0xff0000); m.isElite = true;
+                    } else {
+                        const tintVal = Math.min(255, this.level * 20);
+                        m.setTint(Phaser.Display.Color.GetColor(255, 255 - tintVal, 255 - tintVal));
+                    }
+
+                    m.body.setCircle(250, 262, 262); 
+                    m.play('fly');
+                    this.mosquitoes.add(m); 
+                    this.applyZigZag(m);
+                }
+            }
+
+            applyZigZag(m) {
+                if(!m || !m.active || !m.body) return;
+                const baseSpeed = 240 + (this.level * 35);
+                const speed = m.isElite ? baseSpeed * 1.5 : baseSpeed;
+                const angle = Phaser.Math.Between(0, 360);
+                
+                m.body.setVelocity(Math.cos(angle)*speed, Math.sin(angle)*speed);
+                m.body.setCollideWorldBounds(true);
+                m.body.setBounce(1, 1);
+
+                const delay = Math.max(90, 480 - (this.level * 50));
+                this.time.delayedCall(Phaser.Math.Between(delay, delay + 180), () => this.applyZigZag(m));
+            }
+
+            handleSlap(x, y) {
+                const now = Date.now();
+                if (now - this.lastSlapTime < 70) return;
+                this.lastSlapTime = now;
+
+                let hits = 0;
+                const radius = this.effectiveRadius || this.weapon.radius;
+
+                // Collisions
+                this.mosquitoes.getChildren().forEach(m => {
+                    if(m.active && Phaser.Math.Distance.Between(x, y, m.x, m.y) < radius) {
+                        m.destroy(); 
+                        hits++;
+                    }
+                });
+
+                // Weapon visual animation
+                this.hand.setPosition(x, y).setVisible(true).setScale(this.weapon.radius / 110);
+                this.tweens.add({
+                    targets: this.hand,
+                    scale: this.weapon.radius / 220,
+                    duration: 55,
+                    yoyo: true,
+                    onComplete: () => {
+                        this.hand.visible = false;
+                    }
+                });
+
+                // Haptic feedback vibration
+                if (GameData.vibration && navigator.vibrate) {
+                    try { navigator.vibrate(hits > 0 ? 40 : 20); } catch(e) {}
+                }
+
+                if(hits > 0) {
+                    Audio.playEffect('slap');
+                    this.combo += hits;
+                    this.score += hits * 10;
+                    GameData.coins += hits * 2;
+                    this.scoreText.setText('SCORE: ' + this.score);
+
+                    if(hits > 1) {
+                        this.showText(x, y - 40, hits === 2 ? 'DOUBLE KILL!' : 'TRIPLE KILL!', '#ffd700', 36);
+                    }
+                    this.showText(x + 20, y, `COMBO X${this.combo}`, '#00ffff', 22);
+                } else {
+                    this.combo = 0;
+                    Audio.playEffect('laugh');
+                    this.rage += 10;
+                    this.updateRage(this.rage);
+
+                    this.showText(x, y, 'MISS! 😂', '#ff3333', 38);
+
+                    const savageDialogues = [
+                        "ABBA KO BHEJ!", "BHAG YAHAN SE!", "KIA GUNDA BANEGA RE?", 
+                        "LOL! LAG GAYE!", "NISHANA KAHAN HAI?", "CHAPPAL SE DARTA HAI?", 
+                        "NOOB ALERT! 😂", "TRY AGAIN, BETA!"
+                    ];
+                    const msg = Phaser.Utils.Array.GetRandom(savageDialogues);
+                    this.showFloatingMeme(x, y, msg);
+                }
+            }
+
+            showFloatingMeme(x, y, msg) {
+                let tx = Phaser.Math.Clamp(x, 140, 400);
+                let ty = Phaser.Math.Clamp(y - 50, 120, 800);
+                const t = this.add.text(tx, ty, msg, {
+                    fontSize: '20px',
+                    fill: '#ffff00',
+                    fontStyle: 'bold',
+                    backgroundColor: '#cc0000',
+                    padding: { x: 8, y: 6 }
+                }).setOrigin(0.5).setDepth(3000);
+
+                this.tweens.add({
+                    targets: t,
+                    y: ty - 60,
+                    alpha: 0,
+                    duration: 900,
+                    onComplete: () => t.destroy()
+                });
+            }
+
+            showText(x, y, str, color, size) {
+                let tx = Phaser.Math.Clamp(x, 70, 470);
+                let ty = Phaser.Math.Clamp(y, 100, 840);
+                const t = this.add.text(tx, ty, str, { 
+                    fontSize: `${size}px`, 
+                    fill: color, 
+                    fontStyle: 'bold',
+                    stroke: '#000',
+                    strokeThickness: 4
+                }).setOrigin(0.5).setDepth(3000);
+
+                this.tweens.add({ 
+                    targets: t, 
+                    y: ty - 70, 
+                    alpha: 0, 
+                    duration: 750, 
+                    onComplete: () => t.destroy() 
+                });
+            }
+
+            updateRage(val) {
+                this.rageBar.clear();
+                this.rageBar.fillStyle(0x333333).fillRect(280, 45, 120, 14);
+                this.rageBar.fillStyle(val > 80 ? 0xff0000 : 0x00ff00).fillRect(280, 45, 120 * (Math.min(val, 100) / 100), 14);
+
+                if(val >= 100) {
+                    Audio.stopBuzz();
+                    if(this.score > GameData.highScore) {
+                        GameData.highScore = this.score;
+                    }
+                    GameData.save();
+                    this.scene.start('GameOverScene', { score: this.score });
+                }
+            }
+        }
+
+        // 5. SETTINGS SCENE WITH PRIVACY POLICY, RESET & VIBRATION
+        class SettingsScene extends Phaser.Scene {
+            constructor() { super('SettingsScene'); }
+            create() {
+                this.add.image(270, 480, 'background').setDisplaySize(540, 960).setAlpha(0.2);
+                this.add.rectangle(270, 480, 540, 960, 0x0a0f1d, 0.9);
+
+                this.add.text(270, 80, 'SETTINGS', { fontSize: '38px', fill: '#00e5ff', fontStyle: 'bold' }).setOrigin(0.5);
+
+                // 1. Sound Button
+                const soundBtn = this.add.rectangle(270, 180, 440, 55, 0x1f293d).setInteractive({ useHandCursor: true }).setStrokeStyle(1, 0x3b82f6);
+                const soundTxt = this.add.text(270, 180, Audio.isMuted ? 'SOUND: OFF 🔇' : 'SOUND: ON 🔊', { fontSize: '20px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                soundBtn.on('pointerdown', () => {
+                    soundTxt.setText(Audio.toggleMute() ? 'SOUND: OFF 🔇' : 'SOUND: ON 🔊');
+                });
+
+                // 2. Vibration / Haptic Button
+                const vibBtn = this.add.rectangle(270, 255, 440, 55, 0x1f293d).setInteractive({ useHandCursor: true }).setStrokeStyle(1, 0x3b82f6);
+                const vibTxt = this.add.text(270, 255, GameData.vibration ? 'HAPTIC VIBRATION: ON 📳' : 'HAPTIC VIBRATION: OFF 📴', { fontSize: '20px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                vibBtn.on('pointerdown', () => {
+                    GameData.vibration = !GameData.vibration;
+                    GameData.save();
+                    vibTxt.setText(GameData.vibration ? 'HAPTIC VIBRATION: ON 📳' : 'HAPTIC VIBRATION: OFF 📴');
+                    if (GameData.vibration && navigator.vibrate) navigator.vibrate(50);
+                });
+
+                // 3. Privacy Policy & Terms Button
+                const policyBtn = this.add.rectangle(270, 335, 440, 55, 0x113322).setInteractive({ useHandCursor: true }).setStrokeStyle(2, 0x10b981);
+                this.add.text(270, 335, '📜 PRIVACY POLICY & TERMS', { fontSize: '18px', fill: '#10b981', fontStyle: 'bold' }).setOrigin(0.5);
+                policyBtn.on('pointerdown', () => {
+                    this.showPolicyModal();
+                });
+
+                // 4. Reset Data Button
+                const resetBtn = this.add.rectangle(270, 415, 440, 55, 0x3b1111).setInteractive({ useHandCursor: true }).setStrokeStyle(1, 0xef4444);
+                this.add.text(270, 415, '⚠️ RESET GAME PROGRESS', { fontSize: '18px', fill: '#ef4444', fontStyle: 'bold' }).setOrigin(0.5);
+                resetBtn.on('pointerdown', () => {
+                    this.showResetConfirm();
+                });
+
+                // Game Info Panel
+                this.add.rectangle(270, 570, 440, 160, 0x111827, 0.8).setStrokeStyle(1, 0x374151);
+                this.add.text(270, 520, 'GAME INFORMATION', { fontSize: '16px', fill: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5);
+                this.add.text(270, 555, 'Mosquito Slayer v1.0.0 (Offline)', { fontSize: '15px', fill: '#ffffff' }).setOrigin(0.5);
+                this.add.text(270, 585, 'Developer: Muhammad Sajawal', { fontSize: '14px', fill: '#94a3b8' }).setOrigin(0.5);
+                this.add.text(270, 615, '100% Offline • Zero Data Tracking', { fontSize: '13px', fill: '#10b981' }).setOrigin(0.5);
+
+                // Back Button
+                const backBtn = this.add.rectangle(270, 830, 280, 55, 0x00e5ff).setInteractive({ useHandCursor: true });
+                this.add.text(270, 830, 'BACK TO MENU', { fontSize: '20px', fill: '#000000', fontStyle: 'bold' }).setOrigin(0.5);
+                backBtn.on('pointerdown', () => this.scene.start('MainMenuScene'));
+            }
+
+            showPolicyModal() {
+                const overlay = this.add.rectangle(270, 480, 540, 960, 0x000000, 0.92).setDepth(4000).setInteractive();
+                const card = this.add.rectangle(270, 470, 480, 660, 0x111827).setDepth(4001).setStrokeStyle(2, 0x00e5ff);
+
+                const title = this.add.text(270, 200, 'PRIVACY & TERMS', { fontSize: '26px', fill: '#00e5ff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(4002);
+
+                const bodyText = 
+                    "Mosquito Slayer is a 100% Offline Casual Game.\n\n" +
+                    "• ZERO Personal Data Collection\n" +
+                    "• NO Location or Device Tracking\n" +
+                    "• NO Third-Party Ads or Trackers\n" +
+                    "• Progression is stored strictly locally\n" +
+                    "• Compliant with Google Play & COPPA\n\n" +
+                    "Live URL:\nhttps://sajawal07.github.io/mosquito-slayer/\n\n" +
+                    "Support Email:\nsajawal0005@gmail.com";
+
+                const desc = this.add.text(270, 410, bodyText, {
+                    fontSize: '15px',
+                    fill: '#f0f4fc',
+                    align: 'center',
+                    lineSpacing: 7,
+                    wordWrap: { width: 420 }
+                }).setOrigin(0.5).setDepth(4002);
+
+                // Open in browser button
+                const openWeb = this.add.rectangle(270, 640, 360, 45, 0x00e5ff).setDepth(4002).setInteractive({ useHandCursor: true });
+                const openWebTxt = this.add.text(270, 640, 'OPEN LIVE WEBSITE 🌐', { fontSize: '16px', fill: '#000', fontStyle: 'bold' }).setOrigin(0.5).setDepth(4003);
+                openWeb.on('pointerdown', () => {
+                    window.open('https://sajawal07.github.io/mosquito-slayer/', '_blank');
+                });
+
+                // Close button
+                const closeBtn = this.add.rectangle(270, 715, 200, 45, 0x374151).setDepth(4002).setInteractive({ useHandCursor: true });
+                const closeTxt = this.add.text(270, 715, 'CLOSE', { fontSize: '16px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(4003);
+
+                closeBtn.on('pointerdown', () => {
+                    overlay.destroy();
+                    card.destroy();
+                    title.destroy();
+                    desc.destroy();
+                    openWeb.destroy();
+                    openWebTxt.destroy();
+                    closeBtn.destroy();
+                    closeTxt.destroy();
+                });
+            }
+
+            showResetConfirm() {
+                const overlay = this.add.rectangle(270, 480, 540, 960, 0x000000, 0.92).setDepth(4000).setInteractive();
+                const card = this.add.rectangle(270, 480, 460, 320, 0x1a0f0f).setDepth(4001).setStrokeStyle(2, 0xef4444);
+
+                const title = this.add.text(270, 390, 'RESET ALL DATA?', { fontSize: '24px', fill: '#ef4444', fontStyle: 'bold' }).setOrigin(0.5).setDepth(4002);
+                const desc = this.add.text(270, 440, 'Coins, unlocked weapons and high score\nwill be reset to zero. Are you sure?', {
+                    fontSize: '15px', fill: '#ddd', align: 'center', lineSpacing: 5
+                }).setOrigin(0.5).setDepth(4002);
+
+                const yesBtn = this.add.rectangle(190, 540, 130, 45, 0xef4444).setDepth(4002).setInteractive({ useHandCursor: true });
+                this.add.text(190, 540, 'YES, RESET', { fontSize: '15px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(4003);
+
+                const noBtn = this.add.rectangle(350, 540, 130, 45, 0x374151).setDepth(4002).setInteractive({ useHandCursor: true });
+                this.add.text(350, 540, 'CANCEL', { fontSize: '15px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(4003);
+
+                yesBtn.on('pointerdown', () => {
+                    GameData.resetData();
+                    overlay.destroy();
+                    card.destroy();
+                    title.destroy();
+                    desc.destroy();
+                    yesBtn.destroy();
+                    noBtn.destroy();
+                    this.scene.restart();
+                });
+
+                noBtn.on('pointerdown', () => {
+                    overlay.destroy();
+                    card.destroy();
+                    title.destroy();
+                    desc.destroy();
+                    yesBtn.destroy();
+                    noBtn.destroy();
+                });
+            }
+        }
+
+        // 6. SHOP SCENE
+        class ShopScene extends Phaser.Scene {
+            constructor() { super('ShopScene'); }
+            create() {
+                this.add.image(270, 480, 'background').setDisplaySize(540, 960).setAlpha(0.25);
+                this.add.rectangle(270, 480, 540, 960, 0x111116, 0.9);
+
+                this.add.text(270, 90, 'WEAPON SHOP', { fontSize: '38px', fill: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5);
+                this.add.text(270, 140, `💰 YOUR COINS: ${GameData.coins}`, { fontSize: '22px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+
+                const keys = Object.keys(GameData.weapons);
+                keys.forEach((key, i) => {
+                    const w = GameData.weapons[key];
+                    const owned = GameData.currentWeapon === key || localStorage.getItem(`ms_own_${key}`) === 'true' || w.price === 0;
+                    const isEquipped = GameData.currentWeapon === key;
+
+                    const y = 250 + (i * 140);
+                    const card = this.add.rectangle(270, y, 480, 115, isEquipped ? 0x224422 : 0x22222a).setStrokeStyle(2, isEquipped ? 0x00ff00 : 0x555566);
+
+                    if (this.textures.exists(key)) {
+                        this.add.image(70, y, key).setScale(0.4);
+                    }
+
+                    this.add.text(140, y - 20, w.name, { fontSize: '26px', fill: '#fff', fontStyle: 'bold' });
+                    this.add.text(140, y + 15, `Radius: ${w.radius}px`, { fontSize: '16px', fill: '#aaa' });
+
+                    const btnColor = isEquipped ? 0x008800 : (owned ? 0x3366cc : 0xcc7700);
+                    const btnTxtStr = isEquipped ? 'EQUIPPED' : (owned ? 'EQUIP' : `${w.price} GOLD`);
+
+                    const btn = this.add.rectangle(430, y, 130, 48, btnColor).setInteractive({ useHandCursor: true }).setStrokeStyle(1, 0xffffff);
+                    this.add.text(430, y, btnTxtStr, { fontSize: '16px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+
+                    btn.on('pointerdown', () => {
+                        if (owned || GameData.coins >= w.price) {
+                            if (!owned) {
+                                GameData.coins -= w.price;
+                            }
+                            GameData.currentWeapon = key;
+                            localStorage.setItem(`ms_own_${key}`, 'true');
+                            GameData.save();
+                            this.scene.restart();
+                        }
+                    });
+                });
+
+                const backBtn = this.add.rectangle(270, 820, 280, 55, 0x444444).setInteractive({ useHandCursor: true }).setStrokeStyle(2, 0xffffff);
+                this.add.text(270, 820, 'BACK TO MENU', { fontSize: '22px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                backBtn.on('pointerdown', () => this.scene.start('MainMenuScene'));
+            }
+        }
+
+        // 7. PAUSE SCENE
+        class PauseScene extends Phaser.Scene {
+            constructor() { super('PauseScene'); }
+            create() {
+                this.add.rectangle(270, 480, 540, 960, 0x000000, 0.8);
+                this.add.text(270, 320, 'GAME PAUSED', { fontSize: '42px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+
+                const resBtn = this.add.rectangle(270, 440, 260, 60, 0x00aa00).setInteractive({ useHandCursor: true }).setStrokeStyle(2, 0xffffff);
+                this.add.text(270, 440, 'RESUME', { fontSize: '24px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                resBtn.on('pointerdown', () => {
+                    this.scene.stop();
+                    this.scene.resume('GameScene');
+                });
+
+                const menuBtn = this.add.rectangle(270, 530, 260, 60, 0xaa0000).setInteractive({ useHandCursor: true }).setStrokeStyle(2, 0xffffff);
+                this.add.text(270, 530, 'QUIT TO MENU', { fontSize: '24px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                menuBtn.on('pointerdown', () => {
+                    Audio.stopBuzz();
+                    this.scene.stop('GameScene');
+                    this.scene.start('MainMenuScene');
+                });
+            }
+        }
+
+        // 8. GAME OVER SCENE
+        class GameOverScene extends Phaser.Scene {
+            constructor() { super('GameOverScene'); }
+            create(data) {
+                Audio.stopBuzz();
+                this.add.rectangle(270, 480, 540, 960, 0x000000, 0.9);
+                this.add.text(270, 240, 'WASTED!', { fontSize: '64px', fill: '#ff1111', fontStyle: 'bold', stroke: '#fff', strokeThickness: 4 }).setOrigin(0.5);
+
+                this.add.text(270, 350, `SCORE: ${data && data.score ? data.score : 0}`, { fontSize: '28px', fill: '#ffffff', fontStyle: 'bold' }).setOrigin(0.5);
+                this.add.text(270, 400, `BEST: ${GameData.highScore}`, { fontSize: '22px', fill: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5);
+
+                const playBtn = this.add.rectangle(270, 510, 280, 60, 0x00aa00).setInteractive({ useHandCursor: true }).setStrokeStyle(2, 0xffffff);
+                this.add.text(270, 510, 'PLAY AGAIN 🔄', { fontSize: '24px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                playBtn.on('pointerdown', () => {
+                    this.scene.start('GameScene');
+                });
+
+                const menuBtn = this.add.rectangle(270, 600, 280, 60, 0xaa0000).setInteractive({ useHandCursor: true }).setStrokeStyle(2, 0xffffff);
+                this.add.text(270, 600, 'MAIN MENU 🏠', { fontSize: '24px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+                menuBtn.on('pointerdown', () => {
+                    this.scene.start('MainMenuScene');
+                });
+            }
+        }
+
+        // CONFIGURATION
+        const config = {
+            type: Phaser.AUTO,
+            parent: 'game-container',
+            width: 540,
+            height: 960,
+            scale: {
+                mode: Phaser.Scale.FIT,
+                autoCenter: Phaser.Scale.CENTER_BOTH
+            },
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    gravity: { y: 0 },
+                    debug: false
+                }
+            },
+            scene: [BootScene, SplashScene, MainMenuScene, SettingsScene, GameScene, ShopScene, PauseScene, GameOverScene]
+        };
+
+        new Phaser.Game(config);
+    </script>
+</body>
+</html>
