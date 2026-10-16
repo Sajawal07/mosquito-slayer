@@ -21,7 +21,7 @@
 ## 📱 Mobile & Tablet Optimizations Included
 
 - **Dynamic Responsive Scaling**: Uses Phaser `Scale.FIT` and `Scale.CENTER_BOTH` so the game automatically fits any mobile phone (16:9, 18:9, 19.5:9, 20:9) and tablets (4:3, 16:10, large screens) with no stretching or distortion.
-- **Sensor Landscape Orientation**: Automatically locks into landscape mode (`sensorLandscape`), allowing smooth rotation when the user flips their tablet or phone.
+- **Portrait Orientation Lock**: Automatically locks into portrait mode, providing consistent vertical gameplay across all devices.
 - **True Full-Screen Immersive Mode**: Automatically hides Android status bar and navigation buttons for a full gaming experience.
 - **Offline Ready**: Phaser engine and all game assets are bundled directly inside the app; no internet connection or CDN is needed.
 - **Touch & Audio Context Support**: Touch gestures unlock WebAudio seamlessly without delay.
@@ -53,10 +53,10 @@
   > ⚡ Play offline anytime, anywhere!
 - **App Icon**: Upload `playstore_icon_512x512.png`.
 - **Feature Graphic**: Upload `playstore_feature_graphic_1024x500.png`.
-- **Screenshots**: Take 2-4 screenshots while playing on your tablet or phone in landscape mode and upload them to the Phone and Tablet screenshot sections.
+- **Screenshots**: Take 2-4 screenshots while playing on your tablet or phone in portrait mode and upload them to the Phone and Tablet screenshot sections.
 
 ### Step 3: Complete App Content Declarations
-- **Privacy Policy**: If your game does not collect personal data, generate a simple standard privacy policy using any free generator (e.g., Flycricket, Privacypolicies.com) and paste the URL.
+- **Privacy Policy**: Use the live GitHub Pages URL: `https://sajawal07.github.io/mosquito-slayer/`
 - **Ads**: Select "No, my app does not contain ads" (unless you add AdMob later).
 - **Target Age**: Select 13+ or appropriate age group.
 - **Data Safety**: Select "No data collected or shared".
